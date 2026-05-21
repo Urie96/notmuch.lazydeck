@@ -33,8 +33,8 @@ local cfg = {
     search = 'g/',
     archive = 'a',
     trash = 'd',
-    unread = 'u',
-    read = 'U',
+    read = 'u',
+    read_all = 'U',
     star = 's',
     unstar = 'x',
     reply = 'r',
@@ -152,8 +152,8 @@ local function display_thread(item)
   local tag_text = #tags > 0 and (' [' .. table.concat(tags, ' ') .. ']') or ''
 
   return deck.style.line {
-    (unread and '● ' or '  '):fg(unread and 'green' or 'darkgray'),
-    (flagged and '★ ' or '  '):fg(flagged and 'yellow' or 'darkgray'),
+    (unread and ' ' or ' '):fg(unread and 'green' or 'darkgray'),
+    (flagged and ' ' or '  '):fg(flagged and 'yellow' or 'darkgray'),
     (date .. '  '):fg 'yellow',
     authors:fg(unread and 'cyan' or 'blue'),
     '  ',
@@ -273,70 +273,82 @@ end
 
 local function build_account_entries(start_counts)
   local entries = {}
+  local display_lines = {}
   for _, name in ipairs(ordered_accounts()) do
     local acc = cfg.accounts[name]
     local q = account_query(name, acc)
     local ck = count_key(nil, 'account-total:' .. name)
     local count = deck.cache.get('notmuch.lazydeck.counts', ck)
-    local suffix = count and ('  ' .. tostring(count)) or ''
+    local display = deck.style.line { (acc.label or name):fg 'cyan', tostring(count or ''):fg 'yellow' }
+    table.insert(display_lines, display)
     table.insert(entries, {
       key = name,
       kind = 'account',
       account = name,
       label = acc.label or name,
       query = q,
-      display = deck.style.line { (acc.label or name):fg 'cyan', suffix:fg 'yellow' },
+      display = display,
       bottom_line = 'Enter 打开账号 | S 同步 | c 写信 | g/ 搜索',
     })
     if start_counts then count_query(nil, 'account-total:' .. name, q) end
   end
 
+  local all_display = deck.style.line { ('All Accounts'):fg 'green', '' }
+  table.insert(display_lines, all_display)
   table.insert(entries, {
     key = 'all-accounts',
     kind = 'mailbox',
     label = 'All Accounts',
     query = cfg.queries.all or '*',
-    display = deck.style.line { ('All Accounts'):fg 'green' },
+    display = all_display,
     bottom_line = 'Enter 查看所有账号邮件',
   })
+  local search_display = deck.style.line { ('Search...'):fg 'green', '' }
+  table.insert(display_lines, search_display)
   table.insert(entries, {
     key = 'search',
     kind = 'search',
     label = 'Search...',
     query = cfg.default_query,
-    display = deck.style.line { ('Search...'):fg 'green' },
+    display = search_display,
     bottom_line = 'Enter 输入 notmuch 查询',
   })
+  deck.style.align_columns(display_lines)
   return attach_preview(entries, account_preview)
 end
 
 local function build_mailbox_entries(start_counts, scope)
   local entries = {}
+  local display_lines = {}
   for _, key in ipairs(cfg.order) do
     local query = scoped_query(scope, key)
     local count = deck.cache.get('notmuch.lazydeck.counts', count_key(scope, key))
     local label = cfg.labels[key] or key
-    local suffix = count and ('  ' .. tostring(count)) or ''
+    local display = deck.style.line { label:fg 'cyan', tostring(count or ''):fg 'yellow' }
+    table.insert(display_lines, display)
     table.insert(entries, {
       key = key,
       kind = 'mailbox',
       account = scope and scope.account or nil,
       label = label,
       query = query,
-      display = deck.style.line { label:fg 'cyan', suffix:fg 'yellow' },
+      display = display,
       bottom_line = 'Enter 打开 | S 同步 | c 写信 | g/ 搜索',
     })
     if start_counts then count_query(scope, key, query) end
   end
+  local search_display = deck.style.line { ('Search...'):fg 'green', '' }
+  table.insert(display_lines, search_display)
   table.insert(entries, {
     key = 'search',
     kind = 'search',
     account = scope and scope.account or nil,
     label = 'Search...',
     query = scoped_query(scope, 'inbox'),
-    display = deck.style.line { ('Search...'):fg 'green' },
+    display = search_display,
     bottom_line = 'Enter 输入 notmuch 查询',
   })
+  deck.style.align_columns(display_lines)
   return attach_preview(entries, mailbox_preview)
 end
 
@@ -357,7 +369,7 @@ local function thread_entry(item, scope)
     timestamp = item.timestamp,
     tags = item.tags or {},
     display = display_thread(item),
-    bottom_line = 'Enter 查看完整 thread | a 归档 | d 删除 | u 未读 | U 已读 | s 加星 | x 取消星 | r 回复',
+    bottom_line = 'Enter 查看完整 thread | a 归档 | d 删除 | u 已读 | U 全部已读 | s 加星 | x 取消星 | r 回复',
   }, {
     __index = {
       keymap = thread_keymap,
@@ -403,7 +415,7 @@ local function list_thread(thread, cb, scope)
       account = scope and scope.account or nil,
       thread = thread,
       display = deck.style.line { ('Thread '):fg 'cyan', tostring(thread):fg 'green' },
-      bottom_line = 'a 归档 | d 删除 | u 未读 | U 已读 | s 加星 | x 取消星 | r 回复',
+      bottom_line = 'a 归档 | d 删除 | u 已读 | U 全部已读 | s 加星 | x 取消星 | r 回复',
     }, {
       __index = {
         keymap = thread_keymap,
@@ -444,6 +456,33 @@ local function tag_current(tags, msg)
   for _, tag in ipairs(tags) do table.insert(cmd, tag) end
   table.insert(cmd, q)
   exec(cmd, function(out) refresh_after(out, msg) end)
+end
+
+local function current_list_query()
+  local path = deck.api.get_current_path()
+  local scope = scope_from_path(path)
+
+  if path[2] == 'search' and path[3] then return path[3] end
+  if has_accounts() and path[2] == 'all-accounts' then return cfg.queries.all or '*' end
+  if scope and path[3] == 'search' and path[4] then return path[4] end
+  if scope and path[3] and cfg.queries[path[3]] then return scoped_query(scope, path[3]) end
+  if cfg.queries[path[2]] then return cfg.queries[path[2]] end
+  return nil
+end
+
+local function mark_current_list_read()
+  local q = current_list_query()
+  if not q then
+    deck.notify('当前页面不是邮件列表')
+    return
+  end
+  deck.confirm {
+    title = '全部标记已读',
+    prompt = '将当前列表全部标记为已读？',
+    on_confirm = function()
+      exec({ 'notmuch', 'tag', '-unread', q }, function(out) refresh_after(out, '当前列表已全部标记为已读') end)
+    end,
+  }
 end
 
 local function sync_mail()
@@ -590,8 +629,8 @@ end
 local thread_actions = {
   archive = function() tag_current({ '-inbox' }, '已归档') end,
   trash = function() tag_current({ '+deleted', '-inbox' }, '已删除') end,
-  unread = function() tag_current({ '+unread' }, '已标为未读') end,
   read = function() tag_current({ '-unread' }, '已标为已读') end,
+  read_all = mark_current_list_read,
   star = function() tag_current({ '+flagged' }, '已加星标') end,
   unstar = function() tag_current({ '-flagged' }, '已取消星标') end,
   reply = reply_current,
@@ -602,8 +641,8 @@ local function install_entry_keymaps()
   for k, _ in pairs(thread_keymap) do thread_keymap[k] = nil end
   if km.archive then thread_keymap[km.archive] = { callback = thread_actions.archive, desc = 'archive' } end
   if km.trash then thread_keymap[km.trash] = { callback = thread_actions.trash, desc = 'trash/delete' } end
-  if km.unread then thread_keymap[km.unread] = { callback = thread_actions.unread, desc = 'mark unread' } end
   if km.read then thread_keymap[km.read] = { callback = thread_actions.read, desc = 'mark read' } end
+  if km.read_all then thread_keymap[km.read_all] = { callback = thread_actions.read_all, desc = 'mark current list read' } end
   if km.star then thread_keymap[km.star] = { callback = thread_actions.star, desc = 'star/flag' } end
   if km.unstar then thread_keymap[km.unstar] = { callback = thread_actions.unstar, desc = 'unstar/unflag' } end
   if km.reply then thread_keymap[km.reply] = { callback = thread_actions.reply, desc = 'reply' } end
