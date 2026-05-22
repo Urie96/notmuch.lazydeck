@@ -22,7 +22,6 @@ local cfg = {
   },
   order = { 'inbox', 'unread', 'starred', 'sent', 'archive', 'trash', 'all' },
   accounts = nil,
-  account_order = nil,
   sync_command = { 'mbsync', '-a' },
   notmuch_new_command = { 'notmuch', 'new' },
   from = os.getenv('EMAIL_FROM') or '',
@@ -90,11 +89,22 @@ local function has_accounts()
   return type(cfg.accounts) == 'table' and next(cfg.accounts) ~= nil
 end
 
+local function account_by_name(name)
+  if type(cfg.accounts) ~= 'table' then return nil end
+  if cfg.accounts[name] then return cfg.accounts[name] end
+  for _, acc in ipairs(cfg.accounts) do
+    if acc.name == name or acc.key == name or acc.id == name then return acc end
+  end
+  return nil
+end
+
 local function ordered_accounts()
   local result = {}
-  if type(cfg.account_order) == 'table' then
-    for _, name in ipairs(cfg.account_order) do
-      if cfg.accounts[name] then table.insert(result, name) end
+  if type(cfg.accounts) ~= 'table' then return result end
+  if cfg.accounts[1] ~= nil then
+    for _, acc in ipairs(cfg.accounts) do
+      local name = acc.name or acc.key or acc.id
+      if name then table.insert(result, name) end
     end
     return result
   end
@@ -104,16 +114,14 @@ local function ordered_accounts()
 end
 
 local function account_query(name, acc)
-  acc = acc or (cfg.accounts and cfg.accounts[name]) or {}
-  if acc.query then return acc.query end
-  if acc.tag then return 'tag:' .. acc.tag end
-  return 'tag:account-' .. name
+  acc = acc or account_by_name(name) or {}
+  return acc.query or ('path:' .. name .. '/**')
 end
 
 local function scoped_query(scope, key)
   if not scope or not scope.account then return cfg.queries[key] end
 
-  local acc = cfg.accounts[scope.account] or {}
+  local acc = account_by_name(scope.account) or {}
   local explicit = acc[key .. '_query']
   if explicit then return explicit end
 
@@ -129,8 +137,8 @@ local function scoped_query(scope, key)
 end
 
 local function scope_from_path(path)
-  if has_accounts() and #path >= 2 and cfg.accounts[path[2]] then
-    return { account = path[2], acc = cfg.accounts[path[2]] }
+  if has_accounts() and #path >= 2 and account_by_name(path[2]) then
+    return { account = path[2], acc = account_by_name(path[2]) }
   end
   return nil
 end
@@ -275,7 +283,7 @@ local function build_account_entries(start_counts)
   local entries = {}
   local display_lines = {}
   for _, name in ipairs(ordered_accounts()) do
-    local acc = cfg.accounts[name]
+    local acc = account_by_name(name)
     local q = account_query(name, acc)
     local ck = count_key(nil, 'account-total:' .. name)
     local count = deck.cache.get('notmuch.lazydeck.counts', ck)
@@ -293,16 +301,6 @@ local function build_account_entries(start_counts)
     if start_counts then count_query(nil, 'account-total:' .. name, q) end
   end
 
-  local all_display = deck.style.line { ('All Accounts'):fg 'green', '' }
-  table.insert(display_lines, all_display)
-  table.insert(entries, {
-    key = 'all-accounts',
-    kind = 'mailbox',
-    label = 'All Accounts',
-    query = cfg.queries.all or '*',
-    display = all_display,
-    bottom_line = 'Enter 查看所有账号邮件',
-  })
   local search_display = deck.style.line { ('Search...'):fg 'green', '' }
   table.insert(display_lines, search_display)
   table.insert(entries, {
@@ -427,8 +425,8 @@ end
 
 local function current_scope_for_action()
   local entry = deck.api.get_hovered()
-  if entry and entry.account and cfg.accounts and cfg.accounts[entry.account] then
-    return { account = entry.account, acc = cfg.accounts[entry.account] }
+  if entry and entry.account and account_by_name(entry.account) then
+    return { account = entry.account, acc = account_by_name(entry.account) }
   end
   local path = deck.api.get_current_path()
   return scope_from_path(path)
@@ -463,7 +461,6 @@ local function current_list_query()
   local scope = scope_from_path(path)
 
   if path[2] == 'search' and path[3] then return path[3] end
-  if has_accounts() and path[2] == 'all-accounts' then return cfg.queries.all or '*' end
   if scope and path[3] == 'search' and path[4] then return path[4] end
   if scope and path[3] and cfg.queries[path[3]] then return scoped_query(scope, path[3]) end
   if cfg.queries[path[2]] then return cfg.queries[path[2]] end
@@ -534,7 +531,6 @@ local function account_send_options(scope)
   local sent_folder = cfg.sent_folder
   local msmtp_account = acc.msmtp_account
   local tags = { '+sent', '-inbox' }
-  if acc.tag then table.insert(tags, '+' .. acc.tag) end
   return from, sent_folder, msmtp_account, tags
 end
 
@@ -693,12 +689,6 @@ function M.list(path, cb)
     else
       list_threads(path[3], cb, nil)
     end
-    return
-  end
-
-  -- /notmuch/all-accounts
-  if has_accounts() and path[2] == 'all-accounts' then
-    list_threads(cfg.queries.all or '*', cb, nil)
     return
   end
 
