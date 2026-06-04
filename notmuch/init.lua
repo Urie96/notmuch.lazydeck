@@ -650,9 +650,10 @@ function M.setup(opt)
   install_entry_keymaps()
 
   local km = cfg.keymap
-  if km.sync then deck.keymap.set('main', km.sync, sync_mail, { desc = 'mail sync' }) end
-  if km.compose then deck.keymap.set('main', km.compose, compose, { desc = 'compose mail' }) end
-  if km.search then deck.keymap.set('main', km.search, open_search, { desc = 'notmuch search' }) end
+  local path = { 'notmuch', '**' }
+  if km.sync then deck.keymap.set('main', km.sync, sync_mail, { path = path, desc = 'mail sync' }) end
+  if km.compose then deck.keymap.set('main', km.compose, compose, { path = path, desc = 'compose mail' }) end
+  if km.search then deck.keymap.set('main', km.search, open_search, { path = path, desc = 'notmuch search' }) end
 end
 
 function M.meta()
